@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Butterfly Rover — NADIA</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;500;700&display=swap" rel="stylesheet">
+<!-- MQTT.js — browser MQTT over WebSocket -->
+<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg:      #060809;
+    --panel:   #0b0e12;
+    --border:  #171e28;
+    --accent:  #00e5ff;
+    --accent2: #ff6b35;
+    --green:   #00ff9d;
+    --warn:    #ffcc00;
+    --purple:  #bd93f9;
+    --text:    #c8d8e8;
+    --dim:     #3a4a5a;
+    --glow:    0 0 14px rgba(0,229,255,0.4);
+    --glow2:   0 0 14px rgba(255,107,53,0.4);
+    --glowp:   0 0 14px rgba(189,147,249,0.5);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* scanlines */
+  body::after {
+    content:'';
+    position:fixed; inset:0;
+    background: repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.07) 2px,rgba(0,0,0,0.07) 4px);
+    pointer-events:none; z-index:9999;
+  }
+
+  /* ── HEADER ── */
+  header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 24px;
+    border-bottom:1px solid var(--border);
+    background:linear-gradient(90deg,rgba(0,229,255,0.04),transparent);
+  }
+  .logo {
+    font-family:'Orbitron',monospace; font-size:1rem; font-weight:900;
+    color:var(--accent); letter-spacing:4px; text-shadow:var(--glow);
+  }
+  .logo em { color:var(--purple); font-style:normal; }
+  .header-right { display:flex; align-items:center; gap:16px; font-family:'Share Tech Mono',monospace; font-size:0.7rem; }
+  .dot { width:8px;height:8px;border-radius:50%;background:var(--dim);transition:all .3s; }
+  .dot.on  { background:var(--green);  box-shadow:0 0 8px var(--green); }
+  .dot.blink{ background:var(--warn); box-shadow:0 0 8px var(--warn); animation:blink .7s infinite; }
+  .dot.err  { background:var(--accent2); box-shadow:var(--glow2); }
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+
+  /* ── LAYOUT ── */
+  .main {
+    display:grid;
+    grid-template-columns:300px 1fr 260px;
+    gap:14px; padding:14px 18px;
+    max-width:1400px; margin:0 auto;
+  }
+  .panel {
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:6px; padding:16px; position:relative;
+  }
+  .panel-label {
+    position:absolute; top:-9px; left:14px;
+    background:var(--panel); padding:0 8px;
+    font-family:'Share Tech Mono',monospace; font-size:0.6rem;
+    color:var(--accent); letter-spacing:2px;
+  }
+
+  /* ── NADIA AI PANEL ── */
+  .nadia-panel { grid-column:1; grid-row:1; }
+
+  /* Wake word orb */
+  .orb-wrap { display:flex;flex-direction:column;align-items:center; margin:10px 0 16px; }
+  .orb {
+    width:80px;height:80px;border-radius:50%;
+    background:radial-gradient(circle at 38% 38%, rgba(189,147,249,0.3), rgba(6,8,9,0.8));
+    border:2px solid var(--dim);
+    display:flex;align-items:center;justify-content:center;
+    font-family:'Orbitron',monospace; font-size:0.55rem; font-weight:700;
+    color:var(--dim); letter-spacing:3px; text-align:center;
+    transition:all .4s; cursor:pointer; position:relative; overflow:hidden;
+  }
+  .orb::before {
+    content:'';position:absolute;inset:0;border-radius:50%;
+    background:radial-gradient(circle,rgba(189,147,249,0.15),transparent 70%);
+    opacity:0;transition:opacity .3s;
+  }
+  .orb.idle      { border-color:var(--dim); color:var(--dim); }
+  .orb.listening { border-color:var(--purple); color:var(--purple); box-shadow:var(--glowp),0 0 40px rgba(189,147,249,0.15); animation:orbPulse 1.2s ease-in-out infinite; }
+  .orb.listening::before { opacity:1; }
+  .orb.processing{ border-color:var(--warn); color:var(--warn); box-shadow:0 0 14px rgba(255,204,0,0.4); animation:orbSpin 1s linear infinite; }
+  .orb.speaking  { border-color:var(--accent); color:var(--accent); box-shadow:var(--glow); animation:orbPulse .6s ease-in-out infinite; }
+  .orb.active    { border-color:var(--green); color:var(--green); box-shadow:0 0 14px rgba(0,255,157,0.4); }
+
+  @keyframes orbPulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.06)} }
+  @keyframes orbSpin  { from{box-shadow:var(--glowp)} to{box-shadow:0 0 20px rgba(189,147,249,0.1)} }
+
+  .orb-state {
+    margin-top:8px; font-family:'Share Tech Mono',monospace;
+    font-size:0.65rem; color:var(--dim); letter-spacing:2px; text-align:center;
+  }
+  .orb-state.active { color:var(--purple); }
+
+  /* Waveform bars */
+  .waveform {
+    display:flex; align-items:center; gap:3px; height:28px; margin:8px 0;
+    justify-content:center;
+  }
+  .wave-bar {
+    width:3px; border-radius:2px; background:var(--dim);
+    transition:height .1s, background .3s;
+    min-height:3px;
+  }
+  .waveform.active .wave-bar { background:var(--purple); }
+
+  /* Transcript box */
+  .transcript-box {
+    background:#050709; border:1px solid var(--border);
+    border-radius:4px; padding:10px; min-height:60px;
+    font-family:'Share Tech Mono',monospace; font-size:0.7rem;
+    color:var(--dim); line-height:1.7; margin-bottom:10px;
+  }
+  .transcript-box .user-text { color:var(--text); }
+  .transcript-box .nadia-text { color:var(--purple); }
+  .transcript-box .cmd-text   { color:var(--accent); }
+  .transcript-box .err-text   { color:var(--accent2); }
+
+  /* Groq API key */
+  .input-group { margin-bottom:10px; }
+  .input-group label {
+    display:block; font-size:0.65rem; color:var(--dim);
+    letter-spacing:1px; text-transform:uppercase;
+    margin-bottom:5px; font-family:'Share Tech Mono',monospace;
+  }
+  .input-group input {
+    width:100%; background:#050709; border:1px solid var(--border);
+    color:var(--accent); padding:7px 10px; border-radius:4px;
+    font-family:'Share Tech Mono',monospace; font-size:0.8rem; outline:none;
+    transition:border-color .2s;
+  }
+  .input-group input:focus { border-color:var(--accent); box-shadow:var(--glow); }
+
+  .btn {
+    width:100%; padding:9px; border:none; border-radius:4px;
+    cursor:pointer; font-family:'Orbitron',monospace;
+    font-weight:700; font-size:0.75rem; letter-spacing:2px;
+    text-transform:uppercase; transition:all .2s;
+  }
+  .btn-nadia {
+    background:linear-gradient(135deg,rgba(189,147,249,0.2),rgba(6,8,9,0.8));
+    border:1px solid var(--purple); color:var(--purple);
+    margin-bottom:8px;
+  }
+  .btn-nadia:hover { background:rgba(189,147,249,0.25); box-shadow:var(--glowp); }
+  .btn-nadia.active-btn { background:rgba(189,147,249,0.15); animation:borderPulse 1s infinite; }
+  @keyframes borderPulse{0%,100%{box-shadow:var(--glowp)}50%{box-shadow:0 0 4px rgba(189,147,249,0.1)}}
+
+  /* ── VIRTUAL MAP ── */
+  .map-panel { grid-column:2; grid-row:1/3; }
+  #virtualMap {
+    width:100%; aspect-ratio:1;
+    background:#050709; border:1px solid var(--border);
+    border-radius:4px; position:relative; overflow:hidden;
+  }
+  #virtualMap::before {
+    content:''; position:absolute; inset:0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.05) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(0,229,255,0.05) 1px,transparent 1px);
+    background-size:40px 40px;
+  }
+  #trailCanvas { position:absolute;inset:0;width:100%;height:100%; }
+  #rover {
+    position:absolute; width:30px;height:30px;
+    transform:translate(-50%,-50%);
+    transition:left .22s ease,top .22s ease,transform .22s ease;
+  }
+  .map-footer {
+    display:flex;justify-content:space-between;align-items:center;
+    margin-top:8px; font-family:'Share Tech Mono',monospace; font-size:0.68rem; color:var(--dim);
+  }
+  .map-footer span { color:var(--accent); }
+  .btn-clear {
+    background:transparent; border:1px solid var(--border);
+    color:var(--dim); padding:3px 10px; border-radius:3px;
+    cursor:pointer; font-family:'Share Tech Mono',monospace; font-size:0.6rem;
+    letter-spacing:1px; transition:all .2s;
+  }
+  .btn-clear:hover { border-color:var(--accent2); color:var(--accent2); }
+
+  /* ── CONTROLS PANEL ── */
+  .controls-panel { grid-column:1; grid-row:2; }
+
+  /* Connection */
+  .conn-row { display:flex; gap:8px; margin-bottom:10px; }
+  .conn-row input {
+    flex:1; background:#050709; border:1px solid var(--border);
+    color:var(--accent); padding:7px 10px; border-radius:4px;
+    font-family:'Share Tech Mono',monospace; font-size:0.8rem; outline:none;
+  }
+  .btn-connect {
+    padding:7px 14px; border:none; border-radius:4px;
+    background:var(--accent); color:var(--bg);
+    font-family:'Orbitron',monospace; font-size:0.65rem; font-weight:700;
+    letter-spacing:1px; cursor:pointer; white-space:nowrap; transition:all .2s;
+  }
+  .btn-connect:hover { filter:brightness(1.2); box-shadow:var(--glow); }
+
+  /* D-Pad */
+  .dpad {
+    display:grid; grid-template-columns:repeat(3,60px);
+    grid-template-rows:repeat(3,60px); gap:5px;
+    justify-content:center; margin:10px auto;
+  }
+  .dpad-btn {
+    background:#080c10; border:1px solid var(--border);
+    border-radius:6px; color:var(--accent); font-size:1.3rem;
+    cursor:pointer; display:flex; align-items:center; justify-content:center;
+    transition:all .1s; user-select:none; touch-action:none;
+  }
+  .dpad-btn:active,.dpad-btn.pressed {
+    background:var(--accent); color:var(--bg); box-shadow:var(--glow); transform:scale(.94);
+  }
+  .dpad-stop {
+    background:rgba(255,107,53,.08); border-color:var(--accent2);
+    color:var(--accent2); font-family:'Share Tech Mono',monospace;
+    font-size:0.6rem; letter-spacing:1px;
+  }
+  .dpad-stop:active,.dpad-stop.pressed { background:var(--accent2); color:var(--bg); box-shadow:var(--glow2); }
+  .dpad-empty { visibility:hidden; }
+
+  .speed-row {
+    display:flex; align-items:center; gap:10px; margin-top:10px;
+    font-family:'Share Tech Mono',monospace; font-size:0.68rem;
+  }
+  .speed-row label { color:var(--dim); white-space:nowrap; }
+  input[type=range] {
+    flex:1; -webkit-appearance:none; height:3px;
+    background:var(--border); border-radius:2px; outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance:none; width:14px;height:14px;
+    border-radius:50%; background:var(--accent); cursor:pointer; box-shadow:var(--glow);
+  }
+  #speedVal { color:var(--accent); min-width:36px; }
+
+  .key-hints {
+    display:flex; flex-wrap:wrap; gap:5px; margin-top:10px; justify-content:center;
+  }
+  .kh {
+    background:#050709; border:1px solid var(--border); border-radius:3px;
+    padding:2px 7px; font-family:'Share Tech Mono',monospace; font-size:0.6rem; color:var(--dim);
+  }
+  .kh b { color:var(--accent); }
+
+  /* ── TELEMETRY ── */
+  .tele-panel { grid-column:3; grid-row:1/3; }
+  .tele-row {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:7px 0; border-bottom:1px solid #0d1218;
+  }
+  .tele-row:last-child { border:none; }
+  .tk { color:var(--dim); font-family:'Share Tech Mono',monospace; font-size:0.65rem; letter-spacing:1px; }
+  .tv { color:var(--green); font-family:'Share Tech Mono',monospace; font-size:0.75rem; font-weight:600; }
+  .tv.warn { color:var(--warn); }
+  .tv.purple { color:var(--purple); }
+
+  /* Compass */
+  .compass-wrap { display:flex; justify-content:center; margin:14px 0 8px; }
+  #compassSvg { filter:drop-shadow(0 0 6px rgba(0,229,255,.25)); }
+
+  /* log */
+  .log-box {
+    background:#050709; border:1px solid var(--border); border-radius:4px;
+    padding:8px; height:90px; overflow-y:auto;
+    font-family:'Share Tech Mono',monospace; font-size:0.6rem; line-height:1.6;
+    margin-top:12px;
+  }
+  .le      { color:var(--dim); }
+  .le.ok   { color:var(--green); }
+  .le.err  { color:var(--accent2); }
+  .le.cmd  { color:var(--accent); }
+  .le.ai   { color:var(--purple); }
+  .le.nadia{ color:var(--warn); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🦋 BUTTERFLY · <em>NADIA</em></div>
+  <div class="header-right">
+    <div style="display:flex;align-items:center;gap:7px">
+      <div class="dot" id="wsDot"></div>
+      <span id="wsStatus">OFFLINE</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px">
+      <div class="dot" id="nadiaDot"></div>
+      <span id="nadiaStatus">NADIA SLEEPING</span>
+    </div>
+    <span id="pingDisp" style="color:var(--dim)">— ms</span>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- ══ NADIA AI PANEL ══ -->
+  <div class="panel nadia-panel">
+    <span class="panel-label">// NADIA · VOICE AI</span>
+
+    <div class="orb-wrap">
+      <div class="orb idle" id="nadiaOrb" onclick="toggleNadia()">
+        <span id="orbText">WAKE<br>NADIA</span>
+      </div>
+      <div class="orb-state" id="orbState">say "Nadia" to activate</div>
+    </div>
+
+    <div class="waveform" id="waveform">
+      <div class="wave-bar" style="height:4px" id="wb0"></div>
+      <div class="wave-bar" style="height:6px" id="wb1"></div>
+      <div class="wave-bar" style="height:8px" id="wb2"></div>
+      <div class="wave-bar" style="height:5px" id="wb3"></div>
+      <div class="wave-bar" style="height:10px" id="wb4"></div>
+      <div class="wave-bar" style="height:7px" id="wb5"></div>
+      <div class="wave-bar" style="height:4px" id="wb6"></div>
+      <div class="wave-bar" style="height:9px" id="wb7"></div>
+      <div class="wave-bar" style="height:6px" id="wb8"></div>
+      <div class="wave-bar" style="height:5px" id="wb9"></div>
+      <div class="wave-bar" style="height:8px" id="wb10"></div>
+      <div class="wave-bar" style="height:3px" id="wb11"></div>
+    </div>
+
+    <div class="transcript-box" id="transcriptBox">
+      <span style="color:var(--dim)">Transcript will appear here…</span>
+    </div>
+
+    <div class="input-group">
+      <label>Groq API Key</label>
+      <input type="password" id="groqKey" placeholder="gsk_…">
+    </div>
+
+    <button class="btn btn-nadia" id="nadiaBtn" onclick="toggleNadia()">
+      ACTIVATE NADIA
+    </button>
+
+    <div class="log-box" id="aiLog"></div>
+  </div>
+
+  <!-- ══ VIRTUAL MAP ══ -->
+  <div class="panel map-panel">
+    <span class="panel-label">// VIRTUAL ENVIRONMENT</span>
+    <div id="virtualMap">
+      <canvas id="trailCanvas"></canvas>
+      <svg id="rover" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+        <rect x="8" y="10" width="16" height="14" rx="2" fill="#00e5ff" opacity=".9"/>
+        <rect x="3"  y="11" width="6" height="5" rx="1" fill="#1e2530"/>
+        <rect x="23" y="11" width="6" height="5" rx="1" fill="#1e2530"/>
+        <rect x="3"  y="18" width="6" height="5" rx="1" fill="#1e2530"/>
+        <rect x="23" y="18" width="6" height="5" rx="1" fill="#1e2530"/>
+        <polygon points="16,4 20,12 16,9 12,12" fill="#ff6b35"/>
+        <rect x="8" y="10" width="16" height="14" rx="2" fill="none" stroke="#00e5ff" stroke-width=".5" opacity=".4"/>
+      </svg>
+    </div>
+    <div class="map-footer">
+      <span>X=<span id="posX">0</span>  Y=<span id="posY">0</span>  HDG=<span id="heading">0°</span></span>
+      <button class="btn-clear" onclick="clearTrail()">CLEAR</button>
+    </div>
+  </div>
+
+  <!-- ══ CONTROLS ══ -->
+  <div class="panel controls-panel">
+    <span class="panel-label">// MANUAL CONTROLS</span>
+
+    <div class="input-group" style="margin-bottom:6px">
+      <label>HiveMQ User</label>
+      <input type="text" id="mqttUser" value="butterfly" placeholder="HiveMQ username">
+    </div>
+    <div class="input-group" style="margin-bottom:8px">
+      <label>HiveMQ Pass</label>
+      <input type="password" id="mqttPass" value="Rover1234!" placeholder="HiveMQ password">
+    </div>
+    <div style="margin-bottom:10px">
+      <button class="btn-connect" id="connectBtn" onclick="toggleConnect()" style="width:100%">CONNECT MQTT</button>
+    </div>
+
+    <div class="dpad">
+      <div class="dpad-btn dpad-empty"></div>
+      <div class="dpad-btn" id="btn-forward"  data-cmd="forward"  onmousedown="holdStart(this)" onmouseup="holdEnd(this)" onmouseleave="holdEnd(this)" ontouchstart="holdStart(this)" ontouchend="holdEnd(this)">▲</div>
+      <div class="dpad-btn dpad-empty"></div>
+      <div class="dpad-btn" id="btn-left"     data-cmd="left"     onmousedown="holdStart(this)" onmouseup="holdEnd(this)" onmouseleave="holdEnd(this)" ontouchstart="holdStart(this)" ontouchend="holdEnd(this)">◀</div>
+      <div class="dpad-btn dpad-stop"          id="btn-stop"       data-cmd="stop" onclick="sendCmd('stop')">STOP</div>
+      <div class="dpad-btn" id="btn-right"    data-cmd="right"    onmousedown="holdStart(this)" onmouseup="holdEnd(this)" onmouseleave="holdEnd(this)" ontouchstart="holdStart(this)" ontouchend="holdEnd(this)">▶</div>
+      <div class="dpad-btn dpad-empty"></div>
+      <div class="dpad-btn" id="btn-backward" data-cmd="backward" onmousedown="holdStart(this)" onmouseup="holdEnd(this)" onmouseleave="holdEnd(this)" ontouchstart="holdStart(this)" ontouchend="holdEnd(this)">▼</div>
+      <div class="dpad-btn dpad-empty"></div>
+    </div>
+
+    <div class="speed-row">
+      <label>SPD</label>
+      <input type="range" id="speedSlider" min="0" max="100" value="70" oninput="updateSpeed(this.value)">
+      <span id="speedVal">70%</span>
+    </div>
+
+    <div class="key-hints">
+      <div class="kh"><b>W</b> fwd</div>
+      <div class="kh"><b>S</b> rev</div>
+      <div class="kh"><b>A</b> left</div>
+      <div class="kh"><b>D</b> right</div>
+      <div class="kh"><b>SPC</b> stop</div>
+    </div>
+  </div>
+
+  <!-- ══ TELEMETRY ══ -->
+  <div class="panel tele-panel">
+    <span class="panel-label">// TELEMETRY</span>
+
+    <div class="compass-wrap">
+      <svg id="compassSvg" width="86" height="86" viewBox="0 0 86 86">
+        <circle cx="43" cy="43" r="38" fill="none" stroke="#171e28" stroke-width="1.5"/>
+        <circle cx="43" cy="43" r="33" fill="none" stroke="#0b0e12" stroke-width="9"/>
+        <text x="43" y="13" text-anchor="middle" fill="#00e5ff" font-family="Share Tech Mono" font-size="9">N</text>
+        <text x="43" y="79" text-anchor="middle" fill="#3a4a5a" font-family="Share Tech Mono" font-size="9">S</text>
+        <text x="77" y="47" text-anchor="middle" fill="#3a4a5a" font-family="Share Tech Mono" font-size="9">E</text>
+        <text x="9"  y="47" text-anchor="middle" fill="#3a4a5a" font-family="Share Tech Mono" font-size="9">W</text>
+        <g id="compassNeedle" transform="rotate(0,43,43)">
+          <polygon points="43,10 46,43 43,48 40,43" fill="#ff6b35"/>
+          <polygon points="43,76 46,43 43,48 40,43" fill="#222c38"/>
+        </g>
+        <circle cx="43" cy="43" r="4" fill="#060809" stroke="#00e5ff" stroke-width="1"/>
+      </svg>
+    </div>
+
+    <div class="tele-row"><span class="tk">STATE</span>      <span class="tv" id="t-state">IDLE</span></div>
+    <div class="tele-row"><span class="tk">HEADING</span>    <span class="tv" id="t-heading">0°</span></div>
+    <div class="tele-row"><span class="tk">SPEED</span>      <span class="tv" id="t-speed">70%</span></div>
+    <div class="tele-row"><span class="tk">LAST CMD</span>   <span class="tv" id="t-lastcmd">—</span></div>
+    <div class="tele-row"><span class="tk">SOURCE</span>     <span class="tv purple" id="t-source">—</span></div>
+    <div class="tele-row"><span class="tk">CMDS</span>       <span class="tv" id="t-cmdcount">0</span></div>
+    <div class="tele-row"><span class="tk">ACK</span>        <span class="tv" id="t-ack">—</span></div>
+    <div class="tele-row"><span class="tk">PING</span>       <span class="tv" id="t-ping">—</span></div>
+    <div class="tele-row"><span class="tk">NADIA</span>      <span class="tv purple" id="t-nadia">SLEEPING</span></div>
+    <div class="tele-row"><span class="tk">LAST HEARD</span><span class="tv purple" id="t-heard" style="font-size:.6rem;max-width:120px;text-align:right;line-height:1.3">—</span></div>
+  </div>
+
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════
+let ws = null, connected = false;
+let holdTimer = null;
+let speed = 70, cmdCount = 0, pingStart = 0;
+let vx = 0, vy = 0, vHeading = 0;
+let trailPoints = [];
+const STEP = 7;
+
+// Nadia
+let nadiaState  = 'sleeping'; // sleeping | wake-listening | cmd-listening | processing | speaking
+let nadiaActive = false;
+let groqKey     = '';
+
+// Single mic stream — requested ONCE, never released
+let micStream   = null;
+let audioCtx    = null;   // shared AudioContext
+let analyser    = null;
+let waveTimer   = null;
+
+// ScriptProcessor node for continuous raw PCM capture
+let scriptNode  = null;
+let micSource   = null;
+let pcmWake     = [];  // rolling PCM buffer for wake detection
+let pcmCmd      = [];  // PCM buffer for command
+let wakeWindowMs  = 2000;  // check for wake word every 2s
+let cmdWindowMs   = 3500;  // record command for 3.5s
+let wakeTimer     = null;
+let cmdTimer      = null;
+let isCapturingCmd = false;
+
+// ══════════════════════════════════════════════
+//  MQTT — HiveMQ Cloud over WebSocket TLS
+//  Uses MQTT.js loaded from CDN
+// ══════════════════════════════════════════════
+const MQTT_HOST   = '37d039c2a8514103832ccf2a508a7b6b.s1.eu.hivemq.cloud';
+const MQTT_PORT   = 8884;   // WebSocket TLS port on HiveMQ Cloud
+const TOPIC_CMD   = 'butterfly/cmd';
+const TOPIC_ACK   = 'butterfly/ack';
+const TOPIC_STATUS= 'butterfly/status';
+
+let mqttClient = null;
+
+function toggleConnect() {
+  if (connected) {
+    mqttDisconnect();
+  } else {
+    mqttConnect();
+  }
+}
+
+function mqttConnect() {
+  const user = document.getElementById('mqttUser').value.trim();
+  const pass = document.getElementById('mqttPass').value.trim();
+  if (!user || !pass) { aiLog('Enter HiveMQ username and password', 'err'); return; }
+
+  if (typeof mqtt === 'undefined') {
+    aiLog('MQTT.js not loaded — check internet connection', 'err'); return;
+  }
+
+  setDot('wsDot', 'blink');
+  document.getElementById('wsStatus').textContent = 'CONNECTING…';
+  document.getElementById('connectBtn').disabled = true;
+  aiLog('Connecting to HiveMQ Cloud…', 'ok');
+
+  const clientId = 'ButterflyDash_' + Math.random().toString(16).slice(2, 8);
+  const url = `wss://${MQTT_HOST}:${MQTT_PORT}/mqtt`;
+
+  mqttClient = mqtt.connect(url, {
+    clientId,
+    username: user,
+    password: pass,
+    clean: true,
+    reconnectPeriod: 5000,
+    connectTimeout: 10000,
+    rejectUnauthorized: false,
+  });
+
+  mqttClient.on('connect', () => {
+    connected = true;
+    setDot('wsDot', 'on');
+    document.getElementById('wsStatus').textContent = 'MQTT ONLINE';
+    document.getElementById('connectBtn').textContent = 'DISCONNECT';
+    document.getElementById('connectBtn').disabled = false;
+    aiLog('HiveMQ connected ✓', 'ok');
+
+    // Subscribe to ACK topic from rover
+    mqttClient.subscribe(TOPIC_ACK,    { qos: 1 });
+    mqttClient.subscribe(TOPIC_STATUS, { qos: 0 });
+  });
+
+  mqttClient.on('message', (topic, payload) => {
+    try {
+      const d = JSON.parse(payload.toString());
+      if (d.ack) {
+        document.getElementById('t-ack').textContent = d.ack.toUpperCase();
+        if (pingStart) {
+          const ms = Date.now() - pingStart;
+          document.getElementById('t-ping').textContent = ms + ' ms';
+          document.getElementById('pingDisp').textContent = ms + ' ms';
+          pingStart = 0;
+        }
+      }
+      if (d.status) aiLog('Rover: ' + d.status, 'ok');
+    } catch {}
+  });
+
+  mqttClient.on('error', (err) => {
+    aiLog('MQTT error: ' + err.message, 'err');
+    setDot('wsDot', 'err');
+    document.getElementById('connectBtn').disabled = false;
+  });
+
+  mqttClient.on('offline', () => {
+    connected = false;
+    setDot('wsDot', 'blink');
+    document.getElementById('wsStatus').textContent = 'RECONNECTING…';
+    aiLog('MQTT offline — retrying…', 'err');
+  });
+
+  mqttClient.on('close', () => {
+    if (connected) {
+      connected = false;
+      setDot('wsDot', '');
+      document.getElementById('wsStatus').textContent = 'OFFLINE';
+      document.getElementById('connectBtn').textContent = 'CONNECT MQTT';
+      document.getElementById('connectBtn').disabled = false;
+      aiLog('MQTT disconnected', 'err');
+    }
+  });
+}
+
+function mqttDisconnect() {
+  if (mqttClient) {
+    mqttClient.end(true);
+    mqttClient = null;
+  }
+  connected = false;
+  setDot('wsDot', '');
+  document.getElementById('wsStatus').textContent = 'OFFLINE';
+  document.getElementById('connectBtn').textContent = 'CONNECT MQTT';
+  aiLog('Disconnected from HiveMQ', '');
+}
+
+// ══════════════════════════════════════════════
+//  SEND COMMAND
+// ══════════════════════════════════════════════
+function sendCmd(cmd, source='MANUAL') {
+  updateVirtual(cmd);
+  cmdCount++;
+  document.getElementById('t-lastcmd').textContent  = cmd.toUpperCase();
+  document.getElementById('t-cmdcount').textContent = cmdCount;
+  document.getElementById('t-state').textContent    = cmd === 'stop' ? 'IDLE' : cmd.toUpperCase();
+  document.getElementById('t-source').textContent   = source;
+  aiLog(`→ ${cmd.toUpperCase()} [${source}] spd:${speed}%`, 'cmd');
+  if (!connected || !mqttClient) return;
+  pingStart = Date.now();
+  mqttClient.publish(TOPIC_CMD, JSON.stringify({ cmd, speed }), { qos: 1 });
+}
+
+// ══════════════════════════════════════════════
+//  D-PAD / KEYBOARD
+// ══════════════════════════════════════════════
+function holdStart(el) {
+  el.classList.add('pressed');
+  const cmd = el.dataset.cmd;
+  sendCmd(cmd);
+  holdTimer = setInterval(() => sendCmd(cmd), 180);
+}
+function holdEnd(el) {
+  el.classList.remove('pressed');
+  clearInterval(holdTimer); holdTimer = null;
+  sendCmd('stop');
+}
+const keyMap = { w:'forward', s:'backward', a:'left', d:'right', ' ':'stop' };
+const keyHeld = {};
+document.addEventListener('keydown', (e) => {
+  const cmd = keyMap[e.key.toLowerCase()] || keyMap[e.key];
+  if (!cmd || keyHeld[e.key]) return;
+  keyHeld[e.key] = true;
+  const btn = document.getElementById('btn-' + cmd);
+  if (btn) btn.classList.add('pressed');
+  sendCmd(cmd);
+  if (cmd !== 'stop') holdTimer = setInterval(() => sendCmd(cmd), 180);
+});
+document.addEventListener('keyup', (e) => {
+  const cmd = keyMap[e.key.toLowerCase()] || keyMap[e.key];
+  if (!cmd) return;
+  keyHeld[e.key] = false;
+  clearInterval(holdTimer);
+  const btn = document.getElementById('btn-' + cmd);
+  if (btn) btn.classList.remove('pressed');
+  if (cmd !== 'stop') sendCmd('stop');
+});
+function updateSpeed(v) {
+  speed = parseInt(v);
+  document.getElementById('speedVal').textContent = speed + '%';
+  document.getElementById('t-speed').textContent  = speed + '%';
+}
+
+// ══════════════════════════════════════════════
+//  NADIA — VOICE AI
+//  FIX: Use Web Audio API ScriptProcessorNode
+//  to capture raw PCM float32 samples directly.
+//  Encode to WAV in-browser (always valid).
+//  ONE getUserMedia call. No MediaRecorder.
+//  No Web Speech API. Zero permission loops.
+// ══════════════════════════════════════════════
+
+function toggleNadia() {
+  if (!nadiaActive) startNadia();
+  else stopNadia();
+}
+
+async function startNadia() {
+  const raw = document.getElementById('groqKey').value;
+  // Strip all non-printable / non-ASCII chars that break HTTP headers
+  groqKey = raw.replace(/[^\x20-\x7E]/g, '').trim();
+  if (!groqKey) { aiLog('Enter Groq API key first', 'err'); return; }
+  if (groqKey.length !== raw.trim().length) {
+    aiLog('⚠ Key had invalid chars — stripped. Re-check if auth fails.', 'err');
+  }
+
+  // ── ONE getUserMedia for the entire page session ──
+  if (!micStream) {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true } });
+      aiLog('Mic acquired ✓', 'ok');
+    } catch(e) { aiLog('Mic denied: ' + e.message, 'err'); return; }
+  }
+
+  // ── ONE AudioContext for the entire session ──
+  if (!audioCtx || audioCtx.state === 'closed') {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  }
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+  micSource = audioCtx.createMediaStreamSource(micStream);
+
+  // Analyser for waveform visuals
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 32;
+  micSource.connect(analyser);
+
+  // ScriptProcessor captures raw PCM — no MediaRecorder, no permission prompts
+  scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+  micSource.connect(scriptNode);
+  scriptNode.connect(audioCtx.destination);
+
+  scriptNode.onaudioprocess = (e) => {
+    if (!nadiaActive) return;
+    const samples = e.inputBuffer.getChannelData(0);
+    const copy = new Float32Array(samples);
+    if (isCapturingCmd) {
+      pcmCmd.push(copy);
+    } else {
+      pcmWake.push(copy);
+    }
+  };
+
+  // Waveform ticker
+  const vizData = new Uint8Array(analyser.frequencyBinCount);
+  waveTimer = setInterval(() => {
+    analyser.getByteFrequencyData(vizData);
+    for (let i = 0; i < 12; i++) {
+      const bar = document.getElementById('wb' + i);
+      if (bar) bar.style.height = Math.max(3, (vizData[i]/255)*28) + 'px';
+    }
+  }, 80);
+
+  nadiaActive = true;
+  nadiaState  = 'wake-listening';
+  document.getElementById('nadiaBtn').textContent = 'DEACTIVATE NADIA';
+  document.getElementById('nadiaBtn').classList.add('active-btn');
+  setDot('nadiaDot', 'blink');
+  document.getElementById('nadiaStatus').textContent = 'LISTENING FOR WAKE WORD';
+  document.getElementById('t-nadia').textContent = 'WAKE LISTENING';
+  setOrbState('idle', 'WAKE\nLISTEN', 'say "Nadia"');
+
+  scheduleWakeCheck();
+}
+
+function stopNadia() {
+  nadiaActive    = false;
+  isCapturingCmd = false;
+  nadiaState     = 'sleeping';
+  clearTimeout(wakeTimer);
+  clearTimeout(cmdTimer);
+  pcmWake = []; pcmCmd = [];
+
+  if (scriptNode)  { scriptNode.disconnect();  scriptNode = null; }
+  if (micSource)   { micSource.disconnect();   micSource  = null; }
+  if (waveTimer)   { clearInterval(waveTimer); waveTimer  = null; }
+  // NOTE: micStream and audioCtx intentionally kept alive for re-activation without permission prompt
+
+  document.getElementById('nadiaBtn').textContent = 'ACTIVATE NADIA';
+  document.getElementById('nadiaBtn').classList.remove('active-btn');
+  setOrbState('idle', 'NADIA\nOFFLINE', 'press activate');
+  setDot('nadiaDot', '');
+  document.getElementById('nadiaStatus').textContent = 'NADIA SLEEPING';
+  document.getElementById('t-nadia').textContent = 'SLEEPING';
+  document.getElementById('waveform').classList.remove('active');
+}
+
+// ── Schedule a 2-second wake word check ──
+function scheduleWakeCheck() {
+  pcmWake = [];
+  wakeTimer = setTimeout(async () => {
+    if (!nadiaActive || nadiaState !== 'wake-listening') return;
+    const samples = pcmWake.splice(0);          // grab and clear
+    if (samples.length === 0) { scheduleWakeCheck(); return; }
+
+    const wav  = encodeWAV(samples, audioCtx.sampleRate);
+    const text = await whisperTranscribe(wav);
+    aiLog('wake: ' + (text || '…'), '');
+
+    if (text && text.toLowerCase().includes('nadia')) {
+      onWakeWordDetected();
+    } else {
+      scheduleWakeCheck();  // loop — same stream, no new permission
+    }
+  }, wakeWindowMs);
+}
+
+async function onWakeWordDetected() {
+  nadiaState = 'speaking';
+  aiLog('🎙 "Nadia" detected!', 'nadia');
+  addTranscript('nadia', '🎙 Wake word detected!');
+  setOrbState('speaking', 'NADIA\nSPEAKS', 'Ggggg…');
+  setDot('nadiaDot', 'on');
+  document.getElementById('nadiaStatus').textContent = 'RESPONDING';
+  document.getElementById('t-nadia').textContent = 'SPEAKING';
+
+  await speakTTS('Ggggg');
+  if (!nadiaActive) return;
+
+  // ── Start capturing command audio ──
+  nadiaState     = 'cmd-listening';
+  isCapturingCmd = true;
+  pcmCmd         = [];
+  setOrbState('listening', 'LISTEN\nING', 'speak now…');
+  setDot('nadiaDot', 'blink');
+  document.getElementById('nadiaStatus').textContent = 'COMMAND LISTENING';
+  document.getElementById('t-nadia').textContent = 'HEARING CMD';
+  document.getElementById('waveform').classList.add('active');
+  addTranscript('nadia', '👂 Listening for command…');
+
+  cmdTimer = setTimeout(() => processCommand(), cmdWindowMs);
+}
+
+async function processCommand() {
+  isCapturingCmd = false;
+  document.getElementById('waveform').classList.remove('active');
+  if (!nadiaActive) return;
+
+  nadiaState = 'processing';
+  setOrbState('processing', 'PROCESS\nING', 'Whisper→Llama');
+  document.getElementById('t-nadia').textContent = 'PROCESSING';
+
+  const samples = pcmCmd.splice(0);
+  if (samples.length === 0) {
+    await speakTTS("I didn't hear anything.");
+    resetToWake(); return;
+  }
+
+  const wav = encodeWAV(samples, audioCtx.sampleRate);
+
+  aiLog('Whisper STT…', 'ai');
+  const transcript = await whisperTranscribe(wav);
+
+  if (!transcript) {
+    await speakTTS("Sorry, didn't catch that.");
+    resetToWake(); return;
+  }
+
+  aiLog(`Heard: "${transcript}"`, 'ai');
+  addTranscript('user', '🗣 ' + transcript);
+  document.getElementById('t-heard').textContent = transcript;
+
+  aiLog('Llama intent…', 'ai');
+  const intent = await llamaIntent(transcript);
+  if (!intent) { await speakTTS("Intent error."); resetToWake(); return; }
+
+  aiLog(`CMD:${intent.cmd} dur:${intent.duration}`, 'ai');
+  addTranscript('cmd', `⚡ ${intent.cmd.toUpperCase()}${intent.duration?' ('+intent.duration+'s)':''}`);
+
+  setOrbState('active', 'EXECUTE', intent.cmd.toUpperCase());
+  document.getElementById('t-nadia').textContent = 'EXECUTING';
+  sendCmd(intent.cmd, 'NADIA');
+  if (intent.cmd !== 'stop') {
+    setTimeout(() => sendCmd('stop','NADIA-AUTO'), (intent.duration||1.5)*1000);
+  }
+
+  nadiaState = 'speaking';
+  setOrbState('speaking', 'NADIA\nSPEAKS', intent.reply);
+  await speakTTS(intent.reply);
+  addTranscript('nadia', '🔊 ' + intent.reply);
+
+  resetToWake();
+}
+
+function resetToWake() {
+  if (!nadiaActive) return;
+  nadiaState = 'wake-listening';
+  setOrbState('idle', 'WAKE\nLISTEN', 'say "Nadia" again');
+  setDot('nadiaDot', 'blink');
+  document.getElementById('nadiaStatus').textContent = 'LISTENING FOR WAKE WORD';
+  document.getElementById('t-nadia').textContent = 'WAKE LISTENING';
+  scheduleWakeCheck();
+}
+
+// ══════════════════════════════════════════════
+//  WAV ENCODER — converts Float32 PCM → valid
+//  WAV blob that Groq Whisper always accepts
+// ══════════════════════════════════════════════
+function encodeWAV(chunks, sampleRate) {
+  // Flatten all Float32Array chunks into one
+  const totalLen = chunks.reduce((s,c) => s + c.length, 0);
+  const merged   = new Float32Array(totalLen);
+  let offset = 0;
+  for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+
+  // Convert float32 [-1,1] → int16 PCM
+  const pcm16 = new Int16Array(merged.length);
+  for (let i = 0; i < merged.length; i++) {
+    const s = Math.max(-1, Math.min(1, merged[i]));
+    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+  const blockAlign = numChannels * bitsPerSample / 8;
+  const dataSize  = pcm16.byteLength;
+  const buffer    = new ArrayBuffer(44 + dataSize);
+  const view      = new DataView(buffer);
+
+  function writeStr(off, str) { for (let i=0;i<str.length;i++) view.setUint8(off+i, str.charCodeAt(i)); }
+  writeStr(0, 'RIFF');
+  view.setUint32(4,  36 + dataSize, true);
+  writeStr(8, 'WAVE');
+  writeStr(12,'fmt ');
+  view.setUint32(16, 16, true);          // PCM chunk size
+  view.setUint16(20, 1,  true);          // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate,  true);
+  view.setUint32(28, byteRate,    true);
+  view.setUint16(32, blockAlign,  true);
+  view.setUint16(34, bitsPerSample, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  // Write PCM samples
+  const dst = new Int16Array(buffer, 44);
+  dst.set(pcm16);
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+// ── Strip any non-ASCII / invisible chars from API key ──
+// Browser fetch() requires HTTP headers to be ISO-8859-1 only.
+// Pasting from some apps injects zero-width spaces, smart quotes, etc.
+function safeKey() {
+  // eslint-disable-next-line no-control-regex
+  return groqKey.replace(/[^\x20-\x7E]/g, '').trim();
+}
+
+// ── Whisper — always receives a proper .wav file ──
+async function whisperTranscribe(wavBlob) {
+  try {
+    const key = safeKey();
+    if (!key) { aiLog('API key missing or invalid', 'err'); return ''; }
+    const fd = new FormData();
+    fd.append('file',  wavBlob, 'audio.wav');
+    fd.append('model', 'whisper-large-v3-turbo');
+    fd.append('language', 'en');
+    fd.append('response_format', 'json');
+    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + key },
+      body: fd
+    });
+    if (!res.ok) { aiLog('Whisper err: ' + await res.text(), 'err'); return ''; }
+    const d = await res.json();
+    return (d.text || '').trim();
+  } catch(e) { aiLog('Whisper ex: ' + e.message, 'err'); return ''; }
+}
+
+// ── Llama intent ──
+async function llamaIntent(transcript) {
+  const sys = `You are the intent engine for a 2-wheel rover called Butterfly.
+Extract the rover movement command from the user's speech.
+Respond ONLY with raw JSON, no markdown, no explanation:
+{"cmd":"<command>","reply":"<max 8 word casual reply>","duration":<seconds or null>}
+Valid commands: forward, backward, left, right, stop
+If unclear: {"cmd":"stop","reply":"Say that again?","duration":null}`;
+  try {
+    const key = safeKey();
+    if (!key) { aiLog('API key missing or invalid', 'err'); return null; }
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3.1-8b-instant', max_tokens: 100, temperature: 0.1,
+        messages: [{ role:'system', content:sys }, { role:'user', content:transcript }]
+      })
+    });
+    if (!res.ok) { aiLog('Llama err: ' + await res.text(), 'err'); return null; }
+    const d = await res.json();
+    const raw = d.choices[0].message.content.trim().replace(/```json|```/g,'').trim();
+    return JSON.parse(raw);
+  } catch(e) { aiLog('Llama ex: ' + e.message, 'err'); return null; }
+}
+
+// ── TTS ──
+function speakTTS(text) {
+  return new Promise((resolve) => {
+    if (!('speechSynthesis' in window)) { resolve(); return; }
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = 0.95; utt.pitch = 1.1; utt.volume = 1;
+    const voices = window.speechSynthesis.getVoices();
+    const pick = voices.find(v => ['samantha','zira','female','google uk english female'].some(k => v.name.toLowerCase().includes(k)));
+    if (pick) utt.voice = pick;
+    utt.onend = resolve; utt.onerror = resolve;
+    window.speechSynthesis.speak(utt);
+    aiLog(`TTS: "${text}"`, 'nadia');
+  });
+}
+
+// ── Orb visual ──
+function setOrbState(state, orbTxt, subTxt) {
+  const orb = document.getElementById('nadiaOrb');
+  orb.className = 'orb ' + state;
+  document.getElementById('orbText').textContent = orbTxt;
+  document.getElementById('orbState').textContent = subTxt;
+  document.getElementById('orbState').className = 'orb-state' + (state !== 'idle' ? ' active' : '');
+}
+
+// Tap orb = manual wake trigger
+document.getElementById('nadiaOrb').addEventListener('click', () => {
+  if (nadiaActive && nadiaState === 'wake-listening') {
+    clearTimeout(wakeTimer);
+    pcmWake = [];
+    onWakeWordDetected();
+  }
+});
+
+// ══════════════════════════════════════════════
+//  VIRTUAL ROVER
+// ══════════════════════════════════════════════
+function initVirtual() {
+  const map = document.getElementById('virtualMap');
+  const canvas = document.getElementById('trailCanvas');
+  canvas.width  = map.offsetWidth;
+  canvas.height = map.offsetHeight;
+  vx = canvas.width  / 2;
+  vy = canvas.height / 2;
+  positionRover();
+}
+
+function updateVirtual(cmd) {
+  const canvas = document.getElementById('trailCanvas');
+  const W = canvas.width, H = canvas.height;
+  const rad = (vHeading - 90) * Math.PI / 180;
+  switch(cmd) {
+    case 'forward':  vx += Math.cos(rad)*STEP; vy += Math.sin(rad)*STEP; break;
+    case 'backward': vx -= Math.cos(rad)*STEP; vy -= Math.sin(rad)*STEP; break;
+    case 'left':  vHeading = (vHeading - 15 + 360) % 360; break;
+    case 'right': vHeading = (vHeading + 15) % 360; break;
+  }
+  vx = Math.max(16, Math.min(W-16, vx));
+  vy = Math.max(16, Math.min(H-16, vy));
+  if (cmd !== 'stop') trailPoints.push({ x:vx, y:vy });
+  drawTrail();
+  positionRover();
+
+  const cx = Math.round(vx - W/2), cy = Math.round(-(vy - H/2));
+  document.getElementById('posX').textContent = cx;
+  document.getElementById('posY').textContent = cy;
+  document.getElementById('heading').textContent = Math.round(vHeading) + '°';
+  document.getElementById('t-heading').textContent = Math.round(vHeading) + '°';
+  document.getElementById('compassNeedle').setAttribute('transform', `rotate(${vHeading},43,43)`);
+}
+
+function positionRover() {
+  const r = document.getElementById('rover');
+  r.style.left = vx + 'px';
+  r.style.top  = vy + 'px';
+  r.style.transform = `translate(-50%,-50%) rotate(${vHeading}deg)`;
+}
+
+function drawTrail() {
+  const canvas = document.getElementById('trailCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (trailPoints.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(trailPoints[0].x, trailPoints[0].y);
+  for (let i = 1; i < trailPoints.length; i++) ctx.lineTo(trailPoints[i].x, trailPoints[i].y);
+  ctx.strokeStyle = 'rgba(0,229,255,0.3)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4,3]);
+  ctx.stroke();
+  for (let i = 0; i < trailPoints.length; i += 12) {
+    ctx.beginPath();
+    ctx.arc(trailPoints[i].x, trailPoints[i].y, 2, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(0,229,255,0.45)';
+    ctx.fill();
+  }
+}
+
+function clearTrail() {
+  trailPoints = [];
+  const canvas = document.getElementById('trailCanvas');
+  canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+  vx = canvas.width/2; vy = canvas.height/2; vHeading = 0;
+  positionRover();
+  ['posX','posY'].forEach(id => document.getElementById(id).textContent = '0');
+  document.getElementById('heading').textContent = '0°';
+}
+
+// ══════════════════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════════════════
+function setDot(id, state) {
+  const d = document.getElementById(id);
+  d.className = 'dot ' + state;
+}
+
+function log(msg, type='') {
+  // main log in controls panel not shown separately, use aiLog for now
+}
+
+function aiLog(msg, type='') {
+  const box = document.getElementById('aiLog');
+  const d = document.createElement('div');
+  const ts = new Date().toTimeString().slice(0,8);
+  d.className = 'le ' + type;
+  d.textContent = `[${ts}] ${msg}`;
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
+}
+
+function addTranscript(role, text) {
+  const box = document.getElementById('transcriptBox');
+  if (box.querySelector('span[style]')) box.innerHTML = ''; // clear placeholder
+  const d = document.createElement('div');
+  d.className = role === 'user' ? 'user-text' :
+                role === 'nadia' ? 'nadia-text' :
+                role === 'cmd'   ? 'cmd-text'   : 'err-text';
+  d.textContent = text;
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ══════════════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════════════
+window.addEventListener('load', () => {
+  initVirtual();
+  aiLog('Dashboard ready', 'ok');
+  aiLog('Enter Groq API key → Activate Nadia', '');
+  // preload voices
+  if ('speechSynthesis' in window) window.speechSynthesis.getVoices();
+});
+window.addEventListener('resize', initVirtual);
+window.speechSynthesis && window.addEventListener('load', () => {
+  setTimeout(() => window.speechSynthesis.getVoices(), 500);
+});
+</script>
+</body>
+</html>
