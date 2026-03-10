@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Butterfly Rover — Control Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0a0c10;
+    --panel:    #0f1318;
+    --border:   #1e2530;
+    --accent:   #00e5ff;
+    --accent2:  #ff6b35;
+    --green:    #00ff9d;
+    --warn:     #ffcc00;
+    --text:     #c8d8e8;
+    --dim:      #4a5568;
+    --glow:     0 0 12px rgba(0,229,255,0.35);
+    --glow2:    0 0 12px rgba(255,107,53,0.4);
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content:'';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 28px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0,229,255,0.03);
+  }
+
+  .logo {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1.1rem;
+    color: var(--accent);
+    letter-spacing: 3px;
+    text-shadow: var(--glow);
+  }
+  .logo span { color: var(--accent2); }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.75rem;
+  }
+
+  .status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--dim);
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+  .dot.connected   { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.connecting  { background: var(--warn);  box-shadow: 0 0 8px var(--warn); animation: blink 0.8s infinite; }
+  .dot.error       { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
+
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+  /* Main layout */
+  .main {
+    display: grid;
+    grid-template-columns: 320px 1fr 280px;
+    grid-template-rows: auto auto;
+    gap: 16px;
+    padding: 16px 20px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 18px;
+    position: relative;
+  }
+  .panel::before {
+    content: attr(data-label);
+    position: absolute;
+    top: -10px; left: 16px;
+    background: var(--panel);
+    padding: 0 8px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--accent);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  /* ── CONNECTION PANEL ── */
+  .conn-panel { grid-column: 1; grid-row: 1; }
+
+  .input-group { margin-bottom: 14px; }
+  .input-group label {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--dim);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    font-family: 'Share Tech Mono', monospace;
+  }
+  .input-group input {
+    width: 100%;
+    background: #070a0d;
+    border: 1px solid var(--border);
+    color: var(--accent);
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.85rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .input-group input:focus { border-color: var(--accent); box-shadow: var(--glow); }
+
+  .btn {
+    width: 100%;
+    padding: 10px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 700;
+    font-size: 0.95rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    transition: all 0.2s;
+  }
+  .btn-connect {
+    background: var(--accent);
+    color: var(--bg);
+  }
+  .btn-connect:hover { filter: brightness(1.2); box-shadow: var(--glow); }
+  .btn-connect:disabled { background: var(--dim); cursor: not-allowed; }
+
+  .log-box {
+    margin-top: 14px;
+    background: #070a0d;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    height: 120px;
+    overflow-y: auto;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.65rem;
+    line-height: 1.6;
+  }
+  .log-entry { color: var(--dim); }
+  .log-entry.ok  { color: var(--green); }
+  .log-entry.err { color: var(--accent2); }
+  .log-entry.cmd { color: var(--accent); }
+
+  /* ── VIRTUAL MAP ── */
+  .map-panel { grid-column: 2; grid-row: 1 / 3; }
+
+  #virtualMap {
+    width: 100%;
+    aspect-ratio: 1;
+    background: #070a0d;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Grid lines */
+  #virtualMap::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.06) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  /* Crosshair center */
+  #virtualMap::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%,-50%);
+    width: 12px; height: 12px;
+    border: 1px solid rgba(0,229,255,0.25);
+    border-radius: 50%;
+  }
+
+  #trailCanvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  #rover {
+    position: absolute;
+    width: 32px; height: 32px;
+    transform: translate(-50%,-50%);
+    transition: left 0.25s ease, top 0.25s ease;
+  }
+
+  .map-info {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 10px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--dim);
+  }
+  .map-info span { color: var(--accent); }
+
+  .btn-clear-trail {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+    padding: 4px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+  }
+  .btn-clear-trail:hover { border-color: var(--accent2); color: var(--accent2); }
+
+  /* ── CONTROLS PANEL ── */
+  .controls-panel { grid-column: 1; grid-row: 2; }
+
+  .dpad {
+    display: grid;
+    grid-template-columns: repeat(3, 64px);
+    grid-template-rows:   repeat(3, 64px);
+    gap: 6px;
+    justify-content: center;
+    margin: 10px auto;
+  }
+
+  .dpad-btn {
+    background: #0a0e14;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--accent);
+    font-size: 1.4rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.1s;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+  .dpad-btn:active, .dpad-btn.pressed {
+    background: var(--accent);
+    color: var(--bg);
+    box-shadow: var(--glow);
+    transform: scale(0.95);
+  }
+  .dpad-stop {
+    background: rgba(255,107,53,0.1);
+    border-color: var(--accent2);
+    color: var(--accent2);
+    font-size: 0.7rem;
+    font-family: 'Share Tech Mono', monospace;
+    letter-spacing: 1px;
+  }
+  .dpad-stop:active, .dpad-stop.pressed {
+    background: var(--accent2);
+    color: var(--bg);
+    box-shadow: var(--glow2);
+  }
+  .dpad-empty { visibility: hidden; }
+
+  /* Speed slider */
+  .speed-control { margin-top: 16px; }
+  .speed-label {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    margin-bottom: 8px;
+  }
+  #speedVal { color: var(--accent); }
+
+  input[type=range] {
+    width: 100%;
+    -webkit-appearance: none;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    box-shadow: var(--glow);
+  }
+
+  /* ── TELEMETRY PANEL ── */
+  .tele-panel { grid-column: 3; grid-row: 1 / 3; }
+
+  .tele-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #111820;
+    font-size: 0.85rem;
+  }
+  .tele-row:last-child { border-bottom: none; }
+  .tele-key {
+    color: var(--dim);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 1px;
+  }
+  .tele-val {
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .tele-val.warn { color: var(--warn); }
+
+  /* Heading compass */
+  .compass-wrap {
+    display: flex;
+    justify-content: center;
+    margin: 18px 0 10px;
+  }
+  #compassSvg { filter: drop-shadow(0 0 6px rgba(0,229,255,0.3)); }
+
+  /* AI placeholder */
+  .ai-teaser {
+    margin-top: 18px;
+    padding: 14px;
+    background: rgba(255,107,53,0.05);
+    border: 1px dashed rgba(255,107,53,0.3);
+    border-radius: 4px;
+    text-align: center;
+  }
+  .ai-teaser p {
+    font-size: 0.75rem;
+    color: var(--dim);
+    line-height: 1.6;
+  }
+  .ai-teaser strong { color: var(--accent2); font-family: 'Share Tech Mono', monospace; }
+
+  /* Keyboard hint */
+  .key-hints {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 12px;
+    justify-content: center;
+  }
+  .key-hint {
+    background: #070a0d;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--dim);
+  }
+  .key-hint span { color: var(--accent); }
+
+  @media (max-width: 900px) {
+    .main {
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto;
+    }
+    .map-panel  { grid-column: 1 / 3; grid-row: 1; }
+    .conn-panel { grid-column: 1; grid-row: 2; }
+    .controls-panel { grid-column: 2; grid-row: 2; }
+    .tele-panel { grid-column: 1 / 3; grid-row: 3; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🦋 BUTTERFLY <span>ROVER</span></div>
+  <div class="status-bar">
+    <div class="status-indicator">
+      <div class="dot" id="wsDot"></div>
+      <span id="wsStatus" style="font-size:0.75rem;">DISCONNECTED</span>
+    </div>
+    <div id="pingDisplay" style="color:var(--dim)">— ms</div>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- CONNECTION -->
+  <div class="panel conn-panel" data-label="// CONNECTION">
+    <div class="input-group">
+      <label>ESP8266 IP Address</label>
+      <input type="text" id="espIp" value="192.168.1.XXX" placeholder="e.g. 192.168.1.42">
+    </div>
+    <div class="input-group">
+      <label>WebSocket Port</label>
+      <input type="text" id="espPort" value="81">
+    </div>
+    <button class="btn btn-connect" id="connectBtn" onclick="toggleConnect()">
+      CONNECT
+    </button>
+    <div class="log-box" id="logBox"></div>
+  </div>
+
+  <!-- VIRTUAL MAP -->
+  <div class="panel map-panel" data-label="// VIRTUAL ENVIRONMENT">
+    <div id="virtualMap">
+      <canvas id="trailCanvas"></canvas>
+      <!-- Rover SVG -->
+      <svg id="rover" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+        <!-- Body -->
+        <rect x="8" y="10" width="16" height="14" rx="2" fill="#00e5ff" opacity="0.9"/>
+        <!-- Wheels -->
+        <rect x="3"  y="11" width="6" height="5" rx="1" fill="#1e2530"/>
+        <rect x="23" y="11" width="6" height="5" rx="1" fill="#1e2530"/>
+        <rect x="3"  y="18" width="6" height="5" rx="1" fill="#1e2530"/>
+        <rect x="23" y="18" width="6" height="5" rx="1" fill="#1e2530"/>
+        <!-- Direction arrow -->
+        <polygon points="16,4 20,12 16,9 12,12" fill="#ff6b35"/>
+        <!-- Glow -->
+        <rect x="8" y="10" width="16" height="14" rx="2" fill="none" stroke="#00e5ff" stroke-width="0.5" opacity="0.5"/>
+      </svg>
+    </div>
+    <div class="map-info">
+      <span>POS: X=<span id="posX">0</span>  Y=<span id="posY">0</span></span>
+      <span>HDG: <span id="heading">0°</span></span>
+      <button class="btn-clear-trail" onclick="clearTrail()">CLEAR TRAIL</button>
+    </div>
+  </div>
+
+  <!-- CONTROLS -->
+  <div class="panel controls-panel" data-label="// CONTROLS">
+    <div class="dpad">
+      <div class="dpad-btn dpad-empty"></div>
+      <div class="dpad-btn" id="btn-forward"  data-cmd="forward"  onmousedown="pressBtnStart(this)" onmouseup="pressBtnEnd(this)" onmouseleave="pressBtnEnd(this)" ontouchstart="pressBtnStart(this)" ontouchend="pressBtnEnd(this)">▲</div>
+      <div class="dpad-btn dpad-empty"></div>
+
+      <div class="dpad-btn" id="btn-left"     data-cmd="left"     onmousedown="pressBtnStart(this)" onmouseup="pressBtnEnd(this)" onmouseleave="pressBtnEnd(this)" ontouchstart="pressBtnStart(this)" ontouchend="pressBtnEnd(this)">◀</div>
+      <div class="dpad-btn dpad-stop" id="btn-stop" data-cmd="stop" onclick="sendCmd('stop')">STOP</div>
+      <div class="dpad-btn" id="btn-right"    data-cmd="right"    onmousedown="pressBtnStart(this)" onmouseup="pressBtnEnd(this)" onmouseleave="pressBtnEnd(this)" ontouchstart="pressBtnStart(this)" ontouchend="pressBtnEnd(this)">▶</div>
+
+      <div class="dpad-btn dpad-empty"></div>
+      <div class="dpad-btn" id="btn-backward" data-cmd="backward" onmousedown="pressBtnStart(this)" onmouseup="pressBtnEnd(this)" onmouseleave="pressBtnEnd(this)" ontouchstart="pressBtnStart(this)" ontouchend="pressBtnEnd(this)">▼</div>
+      <div class="dpad-btn dpad-empty"></div>
+    </div>
+
+    <div class="speed-control">
+      <div class="speed-label">
+        <span style="color:var(--dim)">SPEED</span>
+        <span id="speedVal">70%</span>
+      </div>
+      <input type="range" id="speedSlider" min="0" max="100" value="70" oninput="updateSpeed(this.value)">
+    </div>
+
+    <div class="key-hints">
+      <div class="key-hint"><span>W</span> fwd</div>
+      <div class="key-hint"><span>S</span> rev</div>
+      <div class="key-hint"><span>A</span> left</div>
+      <div class="key-hint"><span>D</span> right</div>
+      <div class="key-hint"><span>Space</span> stop</div>
+    </div>
+  </div>
+
+  <!-- TELEMETRY -->
+  <div class="panel tele-panel" data-label="// TELEMETRY">
+    <div class="compass-wrap">
+      <svg id="compassSvg" width="90" height="90" viewBox="0 0 90 90">
+        <circle cx="45" cy="45" r="40" fill="none" stroke="#1e2530" stroke-width="1.5"/>
+        <circle cx="45" cy="45" r="35" fill="none" stroke="#0f1318" stroke-width="8"/>
+        <!-- Cardinal marks -->
+        <text x="45" y="14" text-anchor="middle" fill="#00e5ff" font-family="Share Tech Mono" font-size="9">N</text>
+        <text x="45" y="82" text-anchor="middle" fill="#4a5568" font-family="Share Tech Mono" font-size="9">S</text>
+        <text x="80" y="49" text-anchor="middle" fill="#4a5568" font-family="Share Tech Mono" font-size="9">E</text>
+        <text x="10" y="49" text-anchor="middle" fill="#4a5568" font-family="Share Tech Mono" font-size="9">W</text>
+        <!-- Needle group -->
+        <g id="compassNeedle" transform="rotate(0, 45, 45)">
+          <polygon points="45,12 48,45 45,50 42,45" fill="#ff6b35"/>
+          <polygon points="45,78 48,45 45,50 42,45" fill="#2a3540"/>
+        </g>
+        <circle cx="45" cy="45" r="4" fill="#0a0c10" stroke="#00e5ff" stroke-width="1"/>
+      </svg>
+    </div>
+
+    <div class="tele-row">
+      <span class="tele-key">STATE</span>
+      <span class="tele-val" id="t-state">IDLE</span>
+    </div>
+    <div class="tele-row">
+      <span class="tele-key">HEADING</span>
+      <span class="tele-val" id="t-heading">0°</span>
+    </div>
+    <div class="tele-row">
+      <span class="tele-key">SPEED</span>
+      <span class="tele-val" id="t-speed">70%</span>
+    </div>
+    <div class="tele-row">
+      <span class="tele-key">LAST CMD</span>
+      <span class="tele-val" id="t-lastcmd">—</span>
+    </div>
+    <div class="tele-row">
+      <span class="tele-key">CMDS SENT</span>
+      <span class="tele-val" id="t-cmdcount">0</span>
+    </div>
+    <div class="tele-row">
+      <span class="tele-key">ACK</span>
+      <span class="tele-val" id="t-ack">—</span>
+    </div>
+    <div class="tele-row">
+      <span class="tele-key">PING</span>
+      <span class="tele-val" id="t-ping">—</span>
+    </div>
+
+    <div class="ai-teaser">
+      <p><strong>[ AI MODULE ]</strong><br>
+      Next phase: integrate Claude AI for<br>
+      natural language rover commands.<br>
+      <em>"Go explore the right side"</em></p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ===== STATE =====
+let ws = null;
+let connected = false;
+let currentCmd = null;
+let holdInterval = null;
+let cmdCount = 0;
+let speed = 70;
+let pingStart = 0;
+
+// Virtual position
+let vx = 0, vy = 0;
+let vHeading = 0; // degrees, 0 = up
+const STEP = 6; // px per command tick in virtual map
+
+// Trail
+let trailPoints = [];
+
+// ===== CONNECTION =====
+function toggleConnect() {
+  if (connected) {
+    disconnect();
+  } else {
+    connect();
+  }
+}
+
+function connect() {
+  const ip   = document.getElementById('espIp').value.trim();
+  const port = document.getElementById('espPort').value.trim();
+  const url  = `ws://${ip}:${port}`;
+
+  log(`Connecting to ${url}…`, 'ok');
+  setDot('connecting');
+  document.getElementById('wsStatus').textContent = 'CONNECTING…';
+  document.getElementById('connectBtn').disabled = true;
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    connected = true;
+    setDot('connected');
+    document.getElementById('wsStatus').textContent = 'ONLINE';
+    document.getElementById('connectBtn').textContent = 'DISCONNECT';
+    document.getElementById('connectBtn').disabled = false;
+    log('WebSocket connected!', 'ok');
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.ack) {
+        document.getElementById('t-ack').textContent = data.ack.toUpperCase();
+        if (pingStart) {
+          const ms = Date.now() - pingStart;
+          document.getElementById('t-ping').textContent = ms + ' ms';
+          document.getElementById('pingDisplay').textContent = ms + ' ms';
+          pingStart = 0;
+        }
+      }
+      if (data.msg) log(data.msg, 'ok');
+    } catch(err) {
+      log('MSG: ' + e.data, '');
+    }
+  };
+
+  ws.onerror = (e) => {
+    log('WebSocket error — check IP & port', 'err');
+    setDot('error');
+  };
+
+  ws.onclose = () => {
+    connected = false;
+    setDot('');
+    document.getElementById('wsStatus').textContent = 'DISCONNECTED';
+    document.getElementById('connectBtn').textContent = 'CONNECT';
+    document.getElementById('connectBtn').disabled = false;
+    log('Connection closed', 'err');
+  };
+}
+
+function disconnect() {
+  if (ws) ws.close();
+}
+
+// ===== SEND COMMAND =====
+function sendCmd(cmd) {
+  // Update virtual + heading
+  updateVirtual(cmd);
+
+  // Telemetry
+  cmdCount++;
+  document.getElementById('t-lastcmd').textContent = cmd.toUpperCase();
+  document.getElementById('t-cmdcount').textContent = cmdCount;
+  document.getElementById('t-state').textContent = cmd === 'stop' ? 'IDLE' : cmd.toUpperCase();
+
+  log(`→ ${cmd.toUpperCase()}  spd:${speed}%`, 'cmd');
+
+  if (!connected || !ws) return;
+
+  pingStart = Date.now();
+  const payload = JSON.stringify({ cmd, speed });
+  ws.send(payload);
+}
+
+// ===== BUTTON HOLD LOGIC =====
+function pressBtnStart(el) {
+  el.classList.add('pressed');
+  const cmd = el.dataset.cmd;
+  sendCmd(cmd);
+  holdInterval = setInterval(() => sendCmd(cmd), 180);
+}
+
+function pressBtnEnd(el) {
+  el.classList.remove('pressed');
+  clearInterval(holdInterval);
+  holdInterval = null;
+  if (currentCmd !== 'stop') sendCmd('stop');
+}
+
+// ===== KEYBOARD =====
+const keyMap = { w:'forward', s:'backward', a:'left', d:'right', ' ':'stop' };
+const keyHeld = {};
+
+document.addEventListener('keydown', (e) => {
+  const cmd = keyMap[e.key.toLowerCase()] || keyMap[e.key];
+  if (!cmd || keyHeld[e.key]) return;
+  keyHeld[e.key] = true;
+  const btn = document.getElementById('btn-' + cmd);
+  if (btn) btn.classList.add('pressed');
+  sendCmd(cmd);
+  if (cmd !== 'stop') {
+    holdInterval = setInterval(() => sendCmd(cmd), 180);
+  }
+});
+
+document.addEventListener('keyup', (e) => {
+  const cmd = keyMap[e.key.toLowerCase()] || keyMap[e.key];
+  if (!cmd) return;
+  keyHeld[e.key] = false;
+  clearInterval(holdInterval);
+  const btn = document.getElementById('btn-' + cmd);
+  if (btn) btn.classList.remove('pressed');
+  if (cmd !== 'stop') sendCmd('stop');
+});
+
+// ===== SPEED =====
+function updateSpeed(val) {
+  speed = parseInt(val);
+  document.getElementById('speedVal').textContent = speed + '%';
+  document.getElementById('t-speed').textContent  = speed + '%';
+}
+
+// ===== VIRTUAL ROVER =====
+function initVirtual() {
+  const map   = document.getElementById('virtualMap');
+  const canvas = document.getElementById('trailCanvas');
+  canvas.width  = map.offsetWidth;
+  canvas.height = map.offsetHeight;
+  // Center rover
+  vx = canvas.width  / 2;
+  vy = canvas.height / 2;
+  positionRover();
+}
+
+function updateVirtual(cmd) {
+  const canvas = document.getElementById('trailCanvas');
+  const W = canvas.width, H = canvas.height;
+  const rad = (vHeading - 90) * Math.PI / 180;
+
+  switch(cmd) {
+    case 'forward':
+      vx += Math.cos(rad) * STEP;
+      vy += Math.sin(rad) * STEP;
+      break;
+    case 'backward':
+      vx -= Math.cos(rad) * STEP;
+      vy -= Math.sin(rad) * STEP;
+      break;
+    case 'left':
+      vHeading = (vHeading - 15 + 360) % 360;
+      break;
+    case 'right':
+      vHeading = (vHeading + 15) % 360;
+      break;
+    case 'stop':
+      break;
+  }
+
+  // Clamp to map bounds
+  vx = Math.max(16, Math.min(W - 16, vx));
+  vy = Math.max(16, Math.min(H - 16, vy));
+
+  // Trail
+  if (cmd !== 'stop') trailPoints.push({ x: vx, y: vy, cmd });
+  drawTrail();
+  positionRover();
+
+  // Update displays
+  const cx = Math.round(vx - W/2), cy = Math.round(-(vy - H/2));
+  document.getElementById('posX').textContent    = cx;
+  document.getElementById('posY').textContent    = cy;
+  document.getElementById('heading').textContent  = Math.round(vHeading) + '°';
+  document.getElementById('t-heading').textContent = Math.round(vHeading) + '°';
+
+  // Compass
+  document.getElementById('compassNeedle').setAttribute(
+    'transform', `rotate(${vHeading}, 45, 45)`
+  );
+}
+
+function positionRover() {
+  const rover = document.getElementById('rover');
+  rover.style.left = vx + 'px';
+  rover.style.top  = vy + 'px';
+  rover.style.transform = `translate(-50%,-50%) rotate(${vHeading}deg)`;
+}
+
+function drawTrail() {
+  const canvas = document.getElementById('trailCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (trailPoints.length < 2) return;
+
+  ctx.beginPath();
+  ctx.moveTo(trailPoints[0].x, trailPoints[0].y);
+  for (let i = 1; i < trailPoints.length; i++) {
+    ctx.lineTo(trailPoints[i].x, trailPoints[i].y);
+  }
+  ctx.strokeStyle = 'rgba(0,229,255,0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 3]);
+  ctx.stroke();
+
+  // Dots at waypoints
+  for (let i = 0; i < trailPoints.length; i += 10) {
+    ctx.beginPath();
+    ctx.arc(trailPoints[i].x, trailPoints[i].y, 2, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,229,255,0.5)';
+    ctx.fill();
+  }
+}
+
+function clearTrail() {
+  trailPoints = [];
+  const canvas = document.getElementById('trailCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  vx = canvas.width / 2;
+  vy = canvas.height / 2;
+  vHeading = 0;
+  positionRover();
+  document.getElementById('posX').textContent = '0';
+  document.getElementById('posY').textContent = '0';
+  document.getElementById('heading').textContent = '0°';
+}
+
+// ===== HELPERS =====
+function setDot(state) {
+  const dot = document.getElementById('wsDot');
+  dot.className = 'dot ' + state;
+}
+
+function log(msg, type='') {
+  const box = document.getElementById('logBox');
+  const d   = document.createElement('div');
+  d.className = 'log-entry ' + type;
+  const now = new Date();
+  const ts  = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+  d.textContent = `[${ts}] ${msg}`;
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ===== INIT =====
+window.addEventListener('load', () => {
+  initVirtual();
+  log('Butterfly Rover Dashboard ready', 'ok');
+  log('Enter ESP IP and click CONNECT', '');
+});
+
+window.addEventListener('resize', initVirtual);
+</script>
+</body>
+</html>
